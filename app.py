@@ -8,6 +8,7 @@ import time
 import re
 from datetime import datetime, timedelta, timezone
 from functools import wraps
+import traceback
 
 import jwt
 from flask import Flask, Response, jsonify, render_template, request, send_from_directory, g, has_app_context
@@ -36,6 +37,15 @@ app = Flask(__name__)
 
 _event_counter = 0
 _pg_pool = None
+
+
+def _normalize_db_url(url: str) -> str:
+    if not url:
+        return url
+    if "sslmode=" in url:
+        return url
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}sslmode=require"
 
 
 def now_iso():
@@ -109,7 +119,7 @@ class ConnectionProxy:
 def get_db():
     if not has_app_context():
         if DATABASE_URL:
-            return ConnectionProxy(pg_connect(DATABASE_URL))
+            return ConnectionProxy(pg_connect(_normalize_db_url(DATABASE_URL)))
         con = sqlite3.connect(DB_PATH, check_same_thread=False)
         con.row_factory = sqlite3.Row
         con.execute("PRAGMA journal_mode=WAL")
@@ -124,7 +134,7 @@ def get_db():
         global _pg_pool
         if _pg_pool is None and ConnectionPool:
             _pg_pool = ConnectionPool(
-                conninfo=DATABASE_URL,
+                conninfo=_normalize_db_url(DATABASE_URL),
                 min_size=1,
                 max_size=10,
                 max_idle=300,
@@ -139,7 +149,7 @@ def get_db():
 
             g.db = ConnectionProxy(conn, close_hook=_close)
         else:
-            g.db = ConnectionProxy(pg_connect(DATABASE_URL))
+            g.db = ConnectionProxy(pg_connect(_normalize_db_url(DATABASE_URL)))
         return g.db
     db = getattr(g, "db", None)
     if db and not db.closed:
@@ -160,6 +170,12 @@ def close_db(_exc):
     if db:
         db.close()
         g.db = None
+
+
+@app.errorhandler(Exception)
+def handle_exception(exc):
+    traceback.print_exc()
+    return jsonify({"error": "server_error"}), 500
 
 
 def encrypt_text(text: str) -> str:
@@ -651,6 +667,18 @@ def login():
 @auth_required
 def me():
     return jsonify({"user": user_payload(request.user)})
+
+
+@app.get("/api/health")
+def health():
+    try:
+        con = get_db()
+        row = con.execute("SELECT 1 AS ok").fetchone()
+        con.close()
+        return jsonify({"ok": bool(row and row["ok"] == 1)})
+    except Exception:
+        traceback.print_exc()
+        return jsonify({"ok": False}), 500
 
 
 @app.put("/api/profile")
