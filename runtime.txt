@@ -1,5 +1,1 @@
-<<<<<<< HEAD
 ﻿python-3.13.1
-=======
-﻿python-3.13.1
->>>>>>> 68f6f9b (Initial Nebula messenger)

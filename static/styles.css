@@ -108,8 +108,4 @@ body {
   .sidebar { height: 45vh; border-right: none; border-bottom: 1px solid var(--line); }
   .chat-pane { height: 55vh; }
   .grid2 { grid-template-columns: 1fr; }
-<<<<<<< HEAD
 }
-=======
-}
->>>>>>> 68f6f9b (Initial Nebula messenger)
