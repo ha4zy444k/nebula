@@ -16,11 +16,6 @@ from psycopg import connect as pg_connect
 from psycopg.rows import dict_row
 from werkzeug.security import check_password_hash, generate_password_hash
 
-try:
-    from psycopg_pool import ConnectionPool
-except Exception:
-    ConnectionPool = None
-
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 UPLOAD_DIR = os.path.join(BASE_DIR, "static", "uploads")
@@ -133,25 +128,7 @@ def get_db():
         db = getattr(g, "db", None)
         if db and not db.closed:
             return db
-        global _pg_pool
-        if _pg_pool is None and ConnectionPool:
-            _pg_pool = ConnectionPool(
-                conninfo=_normalize_db_url(DATABASE_URL),
-                min_size=1,
-                max_size=10,
-                max_idle=300,
-                timeout=5,
-            )
-        if _pg_pool:
-            ctx = _pg_pool.connection()
-            conn = ctx.__enter__()
-
-            def _close(_):
-                ctx.__exit__(None, None, None)
-
-            g.db = ConnectionProxy(conn, close_hook=_close)
-        else:
-            g.db = ConnectionProxy(pg_connect(_normalize_db_url(DATABASE_URL)))
+        g.db = ConnectionProxy(pg_connect(_normalize_db_url(DATABASE_URL)))
         return g.db
     db = getattr(g, "db", None)
     if db and not db.closed:
