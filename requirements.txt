@@ -1,3 +1,7 @@
 ﻿Flask==3.1.0
 PyJWT==2.10.1
+<<<<<<< HEAD
 gunicorn==23.0.0
+=======
+gunicorn==23.0.0
+>>>>>>> 68f6f9b (Initial Nebula messenger)

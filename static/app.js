@@ -473,4 +473,8 @@ function bind() {
 bind();
 setAuthLanguage(state.authLang);
 switchTab('login');
+<<<<<<< HEAD
 bootstrapApp();
+=======
+bootstrapApp();
+>>>>>>> 68f6f9b (Initial Nebula messenger)
