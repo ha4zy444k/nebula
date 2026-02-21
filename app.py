@@ -10,10 +10,15 @@ from datetime import datetime, timedelta, timezone
 from functools import wraps
 
 import jwt
-from flask import Flask, Response, jsonify, render_template, request, send_from_directory
+from flask import Flask, Response, jsonify, render_template, request, send_from_directory, g
 from psycopg import connect as pg_connect
 from psycopg.rows import dict_row
 from werkzeug.security import check_password_hash, generate_password_hash
+
+try:
+    from psycopg_pool import ConnectionPool
+except Exception:
+    ConnectionPool = None
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -30,6 +35,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 app = Flask(__name__)
 
 _event_counter = 0
+_pg_pool = None
 
 
 def now_iso():
@@ -65,8 +71,10 @@ class CursorProxy:
 
 
 class ConnectionProxy:
-    def __init__(self, con):
+    def __init__(self, con, close_hook=None):
         self._con = con
+        self._close_hook = close_hook
+        self._closed = False
 
     def cursor(self):
         if DATABASE_URL:
@@ -82,7 +90,17 @@ class ConnectionProxy:
         self._con.commit()
 
     def close(self):
-        self._con.close()
+        if self._closed:
+            return
+        self._closed = True
+        if self._close_hook:
+            self._close_hook(self._con)
+        else:
+            self._con.close()
+
+    @property
+    def closed(self):
+        return self._closed
 
     def __getattr__(self, name):
         return getattr(self._con, name)
@@ -90,10 +108,48 @@ class ConnectionProxy:
 
 def get_db():
     if DATABASE_URL:
-        return ConnectionProxy(pg_connect(DATABASE_URL))
-    con = sqlite3.connect(DB_PATH)
+        db = getattr(g, "db", None)
+        if db and not db.closed:
+            return db
+        global _pg_pool
+        if _pg_pool is None and ConnectionPool:
+            _pg_pool = ConnectionPool(
+                conninfo=DATABASE_URL,
+                min_size=1,
+                max_size=10,
+                max_idle=300,
+                timeout=5,
+            )
+        if _pg_pool:
+            ctx = _pg_pool.connection()
+            conn = ctx.__enter__()
+
+            def _close(_):
+                ctx.__exit__(None, None, None)
+
+            g.db = ConnectionProxy(conn, close_hook=_close)
+        else:
+            g.db = ConnectionProxy(pg_connect(DATABASE_URL))
+        return g.db
+    db = getattr(g, "db", None)
+    if db and not db.closed:
+        return db
+    con = sqlite3.connect(DB_PATH, check_same_thread=False)
     con.row_factory = sqlite3.Row
-    return ConnectionProxy(con)
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("PRAGMA synchronous=NORMAL")
+    con.execute("PRAGMA temp_store=MEMORY")
+    con.execute("PRAGMA cache_size=-20000")
+    g.db = ConnectionProxy(con)
+    return g.db
+
+
+@app.teardown_request
+def close_db(_exc):
+    db = getattr(g, "db", None)
+    if db:
+        db.close()
+        g.db = None
 
 
 def encrypt_text(text: str) -> str:
@@ -214,6 +270,27 @@ def init_db():
             )
             """
         )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_messages_sr_id ON messages (sender_id, receiver_id, id)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_messages_rs_id ON messages (receiver_id, sender_id, id)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_message_reactions_msg ON message_reactions (message_id)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_channel_members_user ON channel_members (user_id)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_channel_members_channel ON channel_members (channel_id)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_channel_posts_channel ON channel_posts (channel_id, id)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_channels_owner ON channels (owner_id)"
+        )
     else:
         cur.execute(
             """
@@ -304,6 +381,27 @@ def init_db():
             )
             """
         )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_messages_sr_id ON messages (sender_id, receiver_id, id)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_messages_rs_id ON messages (receiver_id, sender_id, id)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_message_reactions_msg ON message_reactions (message_id)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_channel_members_user ON channel_members (user_id)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_channel_members_channel ON channel_members (channel_id)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_channel_posts_channel ON channel_posts (channel_id, id)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_channels_owner ON channels (owner_id)"
+        )
     con.commit()
 
     user_count = cur.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
@@ -354,7 +452,6 @@ def auth_required(fn):
             return jsonify({"error": "bad_token"}), 401
         con = get_db()
         user = con.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
-        con.close()
         if not user:
             return jsonify({"error": "user_not_found"}), 401
         if user["is_banned"]:
@@ -555,13 +652,19 @@ def dialogs():
     rows = con.execute(
         """
         SELECT u.id, u.username, u.nickname, u.avatar_url, u.is_verified,
-               MAX(m.id) AS last_message_id,
-               MAX(m.created_at) AS last_message_at
-        FROM messages m
-        JOIN users u ON u.id = CASE WHEN m.sender_id=? THEN m.receiver_id ELSE m.sender_id END
-        WHERE (m.sender_id=? OR m.receiver_id=?) AND m.deleted_at IS NULL
-        GROUP BY u.id, u.username, u.nickname, u.avatar_url, u.is_verified
-        ORDER BY last_message_id DESC
+               m.id AS last_message_id,
+               m.created_at AS last_message_at,
+               m.sender_id AS last_message_sender_id
+        FROM (
+            SELECT CASE WHEN sender_id=? THEN receiver_id ELSE sender_id END AS peer_id,
+                   MAX(id) AS last_id
+            FROM messages
+            WHERE (sender_id=? OR receiver_id=?) AND deleted_at IS NULL
+            GROUP BY peer_id
+        ) lm
+        JOIN messages m ON m.id=lm.last_id
+        JOIN users u ON u.id=lm.peer_id
+        ORDER BY m.id DESC
         """,
         (request.user["id"], request.user["id"], request.user["id"]),
     ).fetchall()
@@ -570,11 +673,19 @@ def dialogs():
         """
         SELECT c.id, c.title, c.username, c.avatar_url, c.is_verified,
                c.owner_id,
-               COALESCE(cm.role, 'not_subscribed') AS role
+               COALESCE(cm.role, 'not_subscribed') AS role,
+               p.created_at AS last_post_at,
+               p.author_id AS last_post_author_id
         FROM channels c
         LEFT JOIN channel_members cm ON cm.channel_id=c.id AND cm.user_id=?
+        LEFT JOIN (
+            SELECT channel_id, MAX(id) AS last_id
+            FROM channel_posts
+            GROUP BY channel_id
+        ) lp ON lp.channel_id=c.id
+        LEFT JOIN channel_posts p ON p.id=lp.last_id
         WHERE c.is_public=1 OR cm.user_id=? OR c.owner_id=?
-        ORDER BY c.id DESC
+        ORDER BY COALESCE(p.id, 0) DESC, c.id DESC
         """,
         (request.user["id"], request.user["id"], request.user["id"]),
     ).fetchall()
@@ -590,6 +701,8 @@ def dialogs():
                     "avatar_url": r["avatar_url"],
                     "is_verified": bool(r["is_verified"]),
                     "last_message_at": r["last_message_at"],
+                    "last_message_id": r["last_message_id"],
+                    "last_message_sender_id": r["last_message_sender_id"],
                 }
                 for r in rows
             ],
@@ -602,6 +715,8 @@ def dialogs():
                     "is_verified": bool(c["is_verified"]),
                     "owner_id": c["owner_id"],
                     "role": c["role"],
+                    "last_post_at": c["last_post_at"],
+                    "last_post_author_id": c["last_post_author_id"],
                 }
                 for c in channels
             ],

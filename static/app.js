@@ -5,18 +5,25 @@
   authLang: localStorage.getItem('nebula_auth_lang') || 'ru',
   view: { type: null, id: null },
   events: null,
+  lastDialogs: {},
+  lastChannels: {},
+  audioCtx: null,
+  soundUnlocked: false,
+  notifyEnabled: false,
 };
 
 const i18n = {
   ru: {
     login: 'Вход', register: 'Регистрация', identity: '@username', password: 'Пароль',
     send: 'Отправить', message: 'Написать сообщение...', search: 'Поиск по @username',
-    dialogs: 'Диалоги', channels: 'Каналы', createAccount: 'Создать аккаунт', signIn: 'Войти'
+    dialogs: 'Диалоги', channels: 'Каналы', createAccount: 'Создать аккаунт', signIn: 'Войти',
+    newMessage: 'Новое сообщение', newPost: 'Новый пост в канале', newPostShort: 'Новый пост'
   },
   en: {
     login: 'Login', register: 'Register', identity: '@username', password: 'Password',
     send: 'Send', message: 'Write a message...', search: 'Search by @username',
-    dialogs: 'Dialogs', channels: 'Channels', createAccount: 'Create account', signIn: 'Sign in'
+    dialogs: 'Dialogs', channels: 'Channels', createAccount: 'Create account', signIn: 'Sign in',
+    newMessage: 'New message', newPost: 'New channel post', newPostShort: 'New post'
   }
 };
 
@@ -39,6 +46,7 @@ const el = {
   createChannel: $('#create-channel'), closeChannel: $('#close-channel'),
   modalAdmin: $('#modal-admin'), adminSearch: $('#admin-search'), adminStats: $('#admin-stats'), adminUsers: $('#admin-users'),
   adminChannels: $('#admin-channels'), closeAdmin: $('#close-admin'),
+  toastWrap: $('#toast-wrap'),
 };
 
 async function api(path, opts = {}) {
@@ -101,6 +109,69 @@ function setAppLanguage(lang) {
   el.btnSend.textContent = t.send;
   document.querySelectorAll('.list-title')[0].textContent = t.dialogs;
   document.querySelectorAll('.list-title')[1].textContent = t.channels;
+}
+
+function unlockSound() {
+  if (!state.audioCtx) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    state.audioCtx = new Ctx();
+  }
+  if (state.audioCtx.state === 'suspended') state.audioCtx.resume();
+  state.soundUnlocked = true;
+}
+
+function playNotify() {
+  if (!state.soundUnlocked || !state.audioCtx) return;
+  const ctx = state.audioCtx;
+  const t = ctx.currentTime;
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0.0001, t);
+  gain.gain.exponentialRampToValueAtTime(0.15, t + 0.02);
+  gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
+  gain.connect(ctx.destination);
+  const osc = ctx.createOscillator();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(784, t);
+  osc.frequency.setValueAtTime(659, t + 0.09);
+  osc.connect(gain);
+  osc.start(t);
+  osc.stop(t + 0.22);
+}
+
+function showToast(title, body, onClick) {
+  if (!el.toastWrap) return;
+  const t = document.createElement('div');
+  t.className = 'toast';
+  t.innerHTML = `<div class="title">${escapeHtml(title)}</div><div class="body">${escapeHtml(body)}</div>`;
+  t.onclick = () => {
+    if (onClick) onClick();
+    t.remove();
+  };
+  el.toastWrap.appendChild(t);
+  setTimeout(() => t.remove(), 5000);
+}
+
+async function requestNotificationPermission() {
+  if (!('Notification' in window)) return;
+  if (Notification.permission === 'default') {
+    try {
+      const p = await Notification.requestPermission();
+      state.notifyEnabled = p === 'granted';
+    } catch (_) {}
+  } else {
+    state.notifyEnabled = Notification.permission === 'granted';
+  }
+}
+
+function notifyUser(title, body, onClick) {
+  playNotify();
+  if (document.hidden && state.notifyEnabled && 'Notification' in window) {
+    const n = new Notification(title, { body });
+    if (onClick) n.onclick = () => { window.focus(); onClick(); n.close(); };
+  } else {
+    showToast(title, body, onClick);
+  }
 }
 
 function switchTab(mode) {
@@ -169,6 +240,7 @@ async function bootstrapApp() {
     profileMini();
     setAppLanguage(state.lang);
     el.btnAdmin.classList.toggle('hidden', !state.me.is_admin);
+    requestNotificationPermission();
     await refreshLists();
     openEvents();
   } catch (_) {
@@ -197,11 +269,46 @@ function renderList(container, items, onClick, formatter) {
 
 async function refreshLists() {
   const data = await api('/api/dialogs');
+  const prevDialogs = state.lastDialogs || {};
+  const prevChannels = state.lastChannels || {};
+  const currDialogs = {};
+  const currChannels = {};
+
+  (data.dialogs || []).forEach((d) => { currDialogs[d.username] = d; });
+  (data.channels || []).forEach((c) => { currChannels[c.username] = c; });
+
   renderList(el.dialogsList, data.dialogs || [], (it) => openDialog(it.username),
     (it) => `<div class="row-item">${avatarMarkup(it.avatar_url, it.nickname || it.username, 'sm')}<span><div>${escapeHtml(it.nickname || it.username)}${verifyBadge(it.is_verified)}</div><div class="sub">@${escapeHtml(it.username)}</div></span></div>`);
 
   renderList(el.channelsList, data.channels || [], (it) => openChannel(it.username),
     (it) => `<div class="row-item">${avatarMarkup(it.avatar_url, it.title, 'sm')}<span><div>${escapeHtml(it.title)}${verifyBadge(it.is_verified)}</div><div class="sub">@${escapeHtml(it.username)} · ${escapeHtml(it.role)}</div></span></div>`);
+
+  if (state.events) {
+    const t = i18n[state.lang] || i18n.ru;
+    (data.dialogs || []).forEach((d) => {
+      const prev = prevDialogs[d.username];
+      const isNew = prev && d.last_message_id && d.last_message_id !== prev.last_message_id;
+      const fromMe = d.last_message_sender_id === state.me.id;
+      const active = state.view.type === 'dialog' && state.view.id === d.username;
+      if (isNew && !fromMe && !active) {
+        notifyUser(d.nickname || d.username, t.newMessage, () => openDialog(d.username));
+      }
+    });
+
+    (data.channels || []).forEach((c) => {
+      const prev = prevChannels[c.username];
+      const isSub = c.role !== 'not_subscribed';
+      const hasNew = prev && c.last_post_at && c.last_post_at !== prev.last_post_at;
+      const fromMe = c.last_post_author_id === state.me.id;
+      const active = state.view.type === 'channel' && state.view.id === c.username;
+      if (isSub && hasNew && !fromMe && !active) {
+        notifyUser(c.title, t.newPostShort, () => openChannel(c.username));
+      }
+    });
+  }
+
+  state.lastDialogs = currDialogs;
+  state.lastChannels = currChannels;
 }
 
 function msgActions(msg, isMine) {
@@ -436,6 +543,7 @@ function openEvents() {
 }
 
 function bind() {
+  document.addEventListener('click', unlockSound, { once: true });
   el.tabLogin.onclick = () => switchTab('login');
   el.tabRegister.onclick = () => switchTab('register');
   el.btnLogin.onclick = authLogin;

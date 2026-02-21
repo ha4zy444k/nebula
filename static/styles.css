@@ -103,6 +103,39 @@ body {
   border-bottom: 2px solid #fff;
   transform: rotate(-45deg);
 }
+.toast-wrap {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  display: grid;
+  gap: 8px;
+  z-index: 1000;
+}
+.toast {
+  min-width: 260px;
+  max-width: 360px;
+  background: #102339;
+  border: 1px solid #2c4d6b;
+  color: var(--text);
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 4px;
+  box-shadow: 0 10px 30px #0006;
+  animation: toast-in 160ms ease-out;
+}
+.toast .title {
+  font-weight: 700;
+  font-size: 14px;
+}
+.toast .body {
+  color: var(--muted);
+  font-size: 13px;
+}
+@keyframes toast-in {
+  from { transform: translateY(8px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
 @media (max-width: 900px) {
   .app { grid-template-columns: 1fr; }
   .sidebar { height: 45vh; border-right: none; border-bottom: 1px solid var(--line); }
