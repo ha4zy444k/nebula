@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from functools import wraps
 
 import jwt
-from flask import Flask, Response, jsonify, render_template, request, send_from_directory, g
+from flask import Flask, Response, jsonify, render_template, request, send_from_directory, g, has_app_context
 from psycopg import connect as pg_connect
 from psycopg.rows import dict_row
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -107,6 +107,16 @@ class ConnectionProxy:
 
 
 def get_db():
+    if not has_app_context():
+        if DATABASE_URL:
+            return ConnectionProxy(pg_connect(DATABASE_URL))
+        con = sqlite3.connect(DB_PATH, check_same_thread=False)
+        con.row_factory = sqlite3.Row
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("PRAGMA synchronous=NORMAL")
+        con.execute("PRAGMA temp_store=MEMORY")
+        con.execute("PRAGMA cache_size=-20000")
+        return ConnectionProxy(con)
     if DATABASE_URL:
         db = getattr(g, "db", None)
         if db and not db.closed:
@@ -1267,7 +1277,8 @@ def events():
     return Response(gen(), mimetype="text/event-stream")
 
 
-init_db()
+with app.app_context():
+    init_db()
 
 
 if __name__ == "__main__":
