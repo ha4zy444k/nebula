@@ -553,7 +553,12 @@ function bind() {
 
   el.userSearch.oninput = () => doSearch().catch(() => {});
   el.btnSend.onclick = () => sendCurrent().catch(() => {});
-  el.msgInput.onkeydown = (e) => { if (e.key === 'Enter') sendCurrent().catch(() => {}); };
+  el.msgInput.onkeydown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendCurrent().catch(() => {});
+    }
+  };
 
   el.openProfile.onclick = () => {
     el.profileNickname.value = state.me?.nickname || '';

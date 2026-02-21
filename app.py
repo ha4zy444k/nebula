@@ -190,6 +190,7 @@ def bump_event():
 def init_db():
     con = get_db()
     cur = con.cursor()
+    is_pg = bool(DATABASE_URL)
     if DATABASE_URL:
         cur.execute(
             """
@@ -412,6 +413,62 @@ def init_db():
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_channels_owner ON channels (owner_id)"
         )
+
+    def ensure_column(table: str, col: str, coldef: str):
+        if is_pg:
+            cur.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {coldef}")
+        else:
+            try:
+                cur.execute(f"ALTER TABLE {table} ADD COLUMN {col} {coldef}")
+            except sqlite3.OperationalError:
+                pass
+
+    ensure_column("users", "login", "TEXT")
+    ensure_column("users", "username", "TEXT")
+    ensure_column("users", "nickname", "TEXT")
+    ensure_column("users", "password_hash", "TEXT")
+    ensure_column("users", "avatar_url", "TEXT")
+    ensure_column("users", "language", "TEXT DEFAULT 'ru'")
+    ensure_column("users", "is_verified", "INTEGER DEFAULT 0")
+    ensure_column("users", "verified_at", "TEXT")
+    ensure_column("users", "is_admin", "INTEGER DEFAULT 0")
+    ensure_column("users", "is_banned", "INTEGER DEFAULT 0")
+    ensure_column("users", "banned_at", "TEXT")
+    ensure_column("users", "created_at", "TEXT")
+
+    ensure_column("messages", "sender_id", "INTEGER")
+    ensure_column("messages", "receiver_id", "INTEGER")
+    ensure_column("messages", "content", "TEXT")
+    ensure_column("messages", "is_e2e", "INTEGER DEFAULT 1")
+    ensure_column("messages", "iv", "TEXT")
+    ensure_column("messages", "created_at", "TEXT")
+    ensure_column("messages", "edited_at", "TEXT")
+    ensure_column("messages", "deleted_at", "TEXT")
+
+    ensure_column("message_reactions", "message_id", "INTEGER")
+    ensure_column("message_reactions", "user_id", "INTEGER")
+    ensure_column("message_reactions", "reaction", "TEXT")
+    ensure_column("message_reactions", "created_at", "TEXT")
+
+    ensure_column("channels", "title", "TEXT")
+    ensure_column("channels", "username", "TEXT")
+    ensure_column("channels", "description", "TEXT")
+    ensure_column("channels", "avatar_url", "TEXT")
+    ensure_column("channels", "owner_id", "INTEGER")
+    ensure_column("channels", "is_public", "INTEGER DEFAULT 1")
+    ensure_column("channels", "is_verified", "INTEGER DEFAULT 0")
+    ensure_column("channels", "verified_at", "TEXT")
+    ensure_column("channels", "created_at", "TEXT")
+
+    ensure_column("channel_members", "channel_id", "INTEGER")
+    ensure_column("channel_members", "user_id", "INTEGER")
+    ensure_column("channel_members", "role", "TEXT DEFAULT 'subscriber'")
+    ensure_column("channel_members", "created_at", "TEXT")
+
+    ensure_column("channel_posts", "channel_id", "INTEGER")
+    ensure_column("channel_posts", "author_id", "INTEGER")
+    ensure_column("channel_posts", "content", "TEXT")
+    ensure_column("channel_posts", "created_at", "TEXT")
     con.commit()
 
     user_count = cur.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
