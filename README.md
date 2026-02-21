@@ -1,11 +1,12 @@
 ﻿# Nebula Messenger
 
-Локальный мессенджер на Flask + SQLite: регистрация/вход, личные сообщения, каналы, админ-панель, SSE realtime, загрузка аватаров.
+Мессенджер на Flask: регистрация/вход, личные сообщения, каналы, админ-панель, SSE realtime, загрузка аватаров.
 
 ## Стек
 - Python 3.11+
 - Flask
-- SQLite
+- PostgreSQL (через `DATABASE_URL`)
+- SQLite fallback для локалки без Postgres
 
 ## Локальный запуск
 ```powershell
@@ -39,6 +40,7 @@ GitHub Pages не подходит (проект серверный). Испол
 5. Добавь ENV:
    - `NEBULA_JWT_SECRET`
    - `NEBULA_MSG_SECRET`
+   - `DATABASE_URL` (внутренняя Postgres БД Render)
 
 ## Важные файлы
 - `app.py` — backend API и БД
@@ -48,6 +50,7 @@ GitHub Pages не подходит (проект серверный). Испол
 - `Procfile`, `wsgi.py`, `runtime.txt` — прод-запуск
 
 ## Примечания
-- База по умолчанию: `data/nebula.db`
+- Если задан `DATABASE_URL`, используется PostgreSQL
+- Если `DATABASE_URL` не задан, используется `data/nebula.db` (SQLite)
 - Загрузки аватаров: `static/uploads/`
 - Первый зарегистрированный пользователь автоматически получает `admin`.

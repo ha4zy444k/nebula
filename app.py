@@ -11,12 +11,15 @@ from functools import wraps
 
 import jwt
 from flask import Flask, Response, jsonify, render_template, request, send_from_directory
+from psycopg import connect as pg_connect
+from psycopg.rows import dict_row
 from werkzeug.security import check_password_hash, generate_password_hash
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 UPLOAD_DIR = os.path.join(BASE_DIR, "static", "uploads")
 DB_PATH = os.path.join(DATA_DIR, "nebula.db")
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 JWT_SECRET = os.environ.get("NEBULA_JWT_SECRET", "nebula-local-jwt-secret")
 MSG_SECRET = os.environ.get("NEBULA_MSG_SECRET", "nebula-local-message-secret").encode("utf-8")
 JWT_ALG = "HS256"
@@ -33,10 +36,64 @@ def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
+def _adapt_sql(sql: str) -> str:
+    if DATABASE_URL:
+        return sql.replace("?", "%s")
+    return sql
+
+
+class CursorProxy:
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    def execute(self, sql, params=None):
+        self._cursor.execute(_adapt_sql(sql), params or ())
+        return self
+
+    def fetchone(self):
+        return self._cursor.fetchone()
+
+    def fetchall(self):
+        return self._cursor.fetchall()
+
+    @property
+    def lastrowid(self):
+        return getattr(self._cursor, "lastrowid", None)
+
+    def __getattr__(self, name):
+        return getattr(self._cursor, name)
+
+
+class ConnectionProxy:
+    def __init__(self, con):
+        self._con = con
+
+    def cursor(self):
+        if DATABASE_URL:
+            return CursorProxy(self._con.cursor(row_factory=dict_row))
+        return CursorProxy(self._con.cursor())
+
+    def execute(self, sql, params=None):
+        cur = self.cursor()
+        cur.execute(sql, params)
+        return cur
+
+    def commit(self):
+        self._con.commit()
+
+    def close(self):
+        self._con.close()
+
+    def __getattr__(self, name):
+        return getattr(self._con, name)
+
+
 def get_db():
+    if DATABASE_URL:
+        return ConnectionProxy(pg_connect(DATABASE_URL))
     con = sqlite3.connect(DB_PATH)
     con.row_factory = sqlite3.Row
-    return con
+    return ConnectionProxy(con)
 
 
 def encrypt_text(text: str) -> str:
@@ -67,95 +124,186 @@ def bump_event():
 def init_db():
     con = get_db()
     cur = con.cursor()
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            login TEXT UNIQUE,
-            username TEXT UNIQUE,
-            nickname TEXT,
-            password_hash TEXT,
-            avatar_url TEXT,
-            language TEXT DEFAULT 'ru',
-            is_verified INTEGER DEFAULT 0,
-            verified_at TEXT,
-            is_admin INTEGER DEFAULT 0,
-            is_banned INTEGER DEFAULT 0,
-            banned_at TEXT,
-            created_at TEXT
+    if DATABASE_URL:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id BIGSERIAL PRIMARY KEY,
+                login TEXT UNIQUE,
+                username TEXT UNIQUE,
+                nickname TEXT,
+                password_hash TEXT,
+                avatar_url TEXT,
+                language TEXT DEFAULT 'ru',
+                is_verified INTEGER DEFAULT 0,
+                verified_at TEXT,
+                is_admin INTEGER DEFAULT 0,
+                is_banned INTEGER DEFAULT 0,
+                banned_at TEXT,
+                created_at TEXT
+            )
+            """
         )
-        """
-    )
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            sender_id INTEGER,
-            receiver_id INTEGER,
-            content TEXT,
-            is_e2e INTEGER DEFAULT 1,
-            iv TEXT,
-            created_at TEXT,
-            edited_at TEXT,
-            deleted_at TEXT,
-            FOREIGN KEY(sender_id) REFERENCES users(id),
-            FOREIGN KEY(receiver_id) REFERENCES users(id)
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS messages (
+                id BIGSERIAL PRIMARY KEY,
+                sender_id BIGINT,
+                receiver_id BIGINT,
+                content TEXT,
+                is_e2e INTEGER DEFAULT 1,
+                iv TEXT,
+                created_at TEXT,
+                edited_at TEXT,
+                deleted_at TEXT,
+                FOREIGN KEY(sender_id) REFERENCES users(id),
+                FOREIGN KEY(receiver_id) REFERENCES users(id)
+            )
+            """
         )
-        """
-    )
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS message_reactions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            message_id INTEGER,
-            user_id INTEGER,
-            reaction TEXT,
-            created_at TEXT,
-            UNIQUE(message_id, user_id)
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS message_reactions (
+                id BIGSERIAL PRIMARY KEY,
+                message_id BIGINT,
+                user_id BIGINT,
+                reaction TEXT,
+                created_at TEXT,
+                UNIQUE(message_id, user_id)
+            )
+            """
         )
-        """
-    )
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS channels (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT,
-            username TEXT UNIQUE,
-            description TEXT,
-            avatar_url TEXT,
-            owner_id INTEGER,
-            is_public INTEGER DEFAULT 1,
-            is_verified INTEGER DEFAULT 0,
-            verified_at TEXT,
-            created_at TEXT
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS channels (
+                id BIGSERIAL PRIMARY KEY,
+                title TEXT,
+                username TEXT UNIQUE,
+                description TEXT,
+                avatar_url TEXT,
+                owner_id BIGINT,
+                is_public INTEGER DEFAULT 1,
+                is_verified INTEGER DEFAULT 0,
+                verified_at TEXT,
+                created_at TEXT
+            )
+            """
         )
-        """
-    )
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS channel_members (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            channel_id INTEGER,
-            user_id INTEGER,
-            role TEXT DEFAULT 'subscriber',
-            created_at TEXT,
-            UNIQUE(channel_id, user_id)
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS channel_members (
+                id BIGSERIAL PRIMARY KEY,
+                channel_id BIGINT,
+                user_id BIGINT,
+                role TEXT DEFAULT 'subscriber',
+                created_at TEXT,
+                UNIQUE(channel_id, user_id)
+            )
+            """
         )
-        """
-    )
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS channel_posts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            channel_id INTEGER,
-            author_id INTEGER,
-            content TEXT,
-            created_at TEXT,
-            FOREIGN KEY(channel_id) REFERENCES channels(id),
-            FOREIGN KEY(author_id) REFERENCES users(id)
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS channel_posts (
+                id BIGSERIAL PRIMARY KEY,
+                channel_id BIGINT,
+                author_id BIGINT,
+                content TEXT,
+                created_at TEXT,
+                FOREIGN KEY(channel_id) REFERENCES channels(id),
+                FOREIGN KEY(author_id) REFERENCES users(id)
+            )
+            """
         )
-        """
-    )
+    else:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                login TEXT UNIQUE,
+                username TEXT UNIQUE,
+                nickname TEXT,
+                password_hash TEXT,
+                avatar_url TEXT,
+                language TEXT DEFAULT 'ru',
+                is_verified INTEGER DEFAULT 0,
+                verified_at TEXT,
+                is_admin INTEGER DEFAULT 0,
+                is_banned INTEGER DEFAULT 0,
+                banned_at TEXT,
+                created_at TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sender_id INTEGER,
+                receiver_id INTEGER,
+                content TEXT,
+                is_e2e INTEGER DEFAULT 1,
+                iv TEXT,
+                created_at TEXT,
+                edited_at TEXT,
+                deleted_at TEXT,
+                FOREIGN KEY(sender_id) REFERENCES users(id),
+                FOREIGN KEY(receiver_id) REFERENCES users(id)
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS message_reactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER,
+                user_id INTEGER,
+                reaction TEXT,
+                created_at TEXT,
+                UNIQUE(message_id, user_id)
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS channels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT,
+                username TEXT UNIQUE,
+                description TEXT,
+                avatar_url TEXT,
+                owner_id INTEGER,
+                is_public INTEGER DEFAULT 1,
+                is_verified INTEGER DEFAULT 0,
+                verified_at TEXT,
+                created_at TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS channel_members (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER,
+                user_id INTEGER,
+                role TEXT DEFAULT 'subscriber',
+                created_at TEXT,
+                UNIQUE(channel_id, user_id)
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS channel_posts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER,
+                author_id INTEGER,
+                content TEXT,
+                created_at TEXT,
+                FOREIGN KEY(channel_id) REFERENCES channels(id),
+                FOREIGN KEY(author_id) REFERENCES users(id)
+            )
+            """
+        )
     con.commit()
 
     user_count = cur.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
@@ -307,7 +455,10 @@ def register():
             now_iso(),
         ),
     )
-    uid = cur.lastrowid
+    if DATABASE_URL:
+        uid = cur.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()["id"]
+    else:
+        uid = cur.lastrowid
     con.commit()
     user = cur.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
     con.close()
@@ -666,7 +817,10 @@ def create_channel():
         "INSERT INTO channels(title,username,description,avatar_url,owner_id,created_at) VALUES(?,?,?,?,?,?)",
         (title, username, description, avatar, request.user["id"], now_iso()),
     )
-    cid = cur.lastrowid
+    if DATABASE_URL:
+        cid = cur.execute("SELECT id FROM channels WHERE username=?", (username,)).fetchone()["id"]
+    else:
+        cid = cur.lastrowid
     con.execute(
         "INSERT INTO channel_members(channel_id,user_id,role,created_at) VALUES(?,?,?,?)",
         (cid, request.user["id"], "owner", now_iso()),
@@ -738,10 +892,16 @@ def join_channel(username):
     if not ch:
         con.close()
         return jsonify({"error": "not_found"}), 404
-    con.execute(
-        "INSERT OR IGNORE INTO channel_members(channel_id,user_id,role,created_at) VALUES(?,?,?,?)",
-        (ch["id"], request.user["id"], "subscriber", now_iso()),
-    )
+    if DATABASE_URL:
+        con.execute(
+            "INSERT INTO channel_members(channel_id,user_id,role,created_at) VALUES(?,?,?,?) ON CONFLICT(channel_id, user_id) DO NOTHING",
+            (ch["id"], request.user["id"], "subscriber", now_iso()),
+        )
+    else:
+        con.execute(
+            "INSERT OR IGNORE INTO channel_members(channel_id,user_id,role,created_at) VALUES(?,?,?,?)",
+            (ch["id"], request.user["id"], "subscriber", now_iso()),
+        )
     con.commit()
     con.close()
     bump_event()
@@ -861,9 +1021,9 @@ def admin_overview():
         ).fetchall()
 
     stats = {
-        "users": con.execute("SELECT COUNT(*) FROM users").fetchone()[0],
-        "channels": con.execute("SELECT COUNT(*) FROM channels").fetchone()[0],
-        "messages": con.execute("SELECT COUNT(*) FROM messages").fetchone()[0],
+        "users": con.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"],
+        "channels": con.execute("SELECT COUNT(*) AS c FROM channels").fetchone()["c"],
+        "messages": con.execute("SELECT COUNT(*) AS c FROM messages").fetchone()["c"],
     }
     con.close()
     return jsonify(
