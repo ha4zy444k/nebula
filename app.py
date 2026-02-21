@@ -42,6 +42,8 @@ _pg_pool = None
 def _normalize_db_url(url: str) -> str:
     if not url:
         return url
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://") :]
     if "sslmode=" in url:
         return url
     sep = "&" if "?" in url else "?"
@@ -175,7 +177,10 @@ def close_db(_exc):
 @app.errorhandler(Exception)
 def handle_exception(exc):
     traceback.print_exc()
-    return jsonify({"error": "server_error"}), 500
+    detail = ""
+    if os.environ.get("NEBULA_DEBUG", "0") == "1" or os.environ.get("FLASK_DEBUG", "0") == "1":
+        detail = f"{type(exc).__name__}: {exc}"
+    return jsonify({"error": "server_error", "detail": detail}), 500
 
 
 def encrypt_text(text: str) -> str:
@@ -676,9 +681,9 @@ def health():
         row = con.execute("SELECT 1 AS ok").fetchone()
         con.close()
         return jsonify({"ok": bool(row and row["ok"] == 1)})
-    except Exception:
+    except Exception as exc:
         traceback.print_exc()
-        return jsonify({"ok": False}), 500
+        return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 500
 
 
 @app.put("/api/profile")
