@@ -1,0 +1,115 @@
+﻿<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Nebula</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div id="auth-view" class="auth-wrap">
+    <div class="auth-card">
+      <div class="brand">Nebula</div>
+      <div class="auth-lang">
+        <button id="auth-lang-ru" class="chip active">RU</button>
+        <button id="auth-lang-en" class="chip">EN</button>
+      </div>
+      <div class="tabs">
+        <button id="tab-login" class="tab active">Вход</button>
+        <button id="tab-register" class="tab">Регистрация</button>
+      </div>
+      <div id="login-form">
+        <input id="login-identity" class="input" placeholder="@username" />
+        <input id="login-password" class="input" type="password" placeholder="Пароль" />
+        <button id="btn-login" class="btn primary">Войти</button>
+      </div>
+      <div id="register-form" class="hidden">
+        <input id="reg-username" class="input" placeholder="Username без @" />
+        <input id="reg-nickname" class="input" placeholder="Никнейм" />
+        <input id="reg-password" class="input" type="password" placeholder="Пароль" />
+        <button id="btn-register" class="btn primary">Создать аккаунт</button>
+      </div>
+      <div id="auth-error" class="error"></div>
+    </div>
+  </div>
+
+  <div id="app-view" class="app hidden">
+    <aside class="sidebar">
+      <div class="profile-row">
+        <button id="open-profile" class="profile-mini"></button>
+        <button id="btn-admin" class="btn ghost hidden">Admin</button>
+        <button id="btn-logout" class="btn ghost">Exit</button>
+      </div>
+      <input id="user-search" class="input search" placeholder="Поиск по @username" />
+      <div id="search-results" class="list"></div>
+      <div class="list-title">Диалоги</div>
+      <div id="dialogs-list" class="list flexfill"></div>
+      <div class="list-title">Каналы</div>
+      <div id="channels-list" class="list flexfill"></div>
+      <button id="btn-new-channel" class="btn">+ Новый канал</button>
+    </aside>
+
+    <main class="chat-pane">
+      <div id="chat-header" class="chat-header">Выберите чат</div>
+      <div id="chat-messages" class="chat-messages"></div>
+      <div id="composer" class="composer hidden">
+        <input id="msg-input" class="input" placeholder="Написать сообщение..." />
+        <button id="btn-send" class="btn primary">Send</button>
+      </div>
+    </main>
+  </div>
+
+  <div id="modal-profile" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-title">Профиль</div>
+      <input id="profile-nickname" class="input" placeholder="Никнейм" />
+      <input id="profile-avatar-file" class="input" type="file" accept="image/*" />
+      <div class="auth-lang">
+        <button id="lang-ru" class="chip">RU</button>
+        <button id="lang-en" class="chip">EN</button>
+      </div>
+      <div class="row">
+        <button id="save-profile" class="btn primary">Сохранить</button>
+        <button id="close-profile" class="btn ghost">Закрыть</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-channel" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-title">Новый канал</div>
+      <input id="channel-title" class="input" placeholder="Название" />
+      <input id="channel-username" class="input" placeholder="Username канала" />
+      <textarea id="channel-description" class="input" placeholder="Описание"></textarea>
+      <input id="channel-avatar-file" class="input" type="file" accept="image/*" />
+      <div class="row">
+        <button id="create-channel" class="btn primary">Создать</button>
+        <button id="close-channel" class="btn ghost">Отмена</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-admin" class="modal hidden">
+    <div class="modal-card wide">
+      <div class="modal-title">Admin Panel</div>
+      <input id="admin-search" class="input" placeholder="Поиск по username/title" />
+      <div id="admin-stats" class="muted"></div>
+      <div class="grid2">
+        <div>
+          <div class="list-title">Users</div>
+          <div id="admin-users" class="list"></div>
+        </div>
+        <div>
+          <div class="list-title">Channels</div>
+          <div id="admin-channels" class="list"></div>
+        </div>
+      </div>
+      <div class="row">
+        <button id="close-admin" class="btn ghost">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
